@@ -23,38 +23,23 @@ const app = express();
  * Allowed Frontend Origins
  */
 const allowedOrigins = [
-  "http://localhost:5173",      // Vite
-  "http://localhost:3000",      // React CRA (if used)
-  "https://fcf-management-app.vercel.app/",
-
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://fcf-management-app.vercel.app"
 ];
 
-/**
- * CORS Configuration
- */
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow Postman, curl, mobile apps (no Origin header)
-      if (!origin) {
-        return callback(null, true);
-      }
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
 
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 
-      return callback(new Error(`CORS Error: ${origin} is not allowed.`));
+      callback(new Error("Not allowed by CORS"));
     },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Accept",
-      "Origin",
-      "X-Requested-With"
-    ]
+    credentials: true
   })
 );
 
