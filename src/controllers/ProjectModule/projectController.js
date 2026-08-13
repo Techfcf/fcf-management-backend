@@ -14,6 +14,8 @@ const createProject = async (req, res) => {
     vcs_gs_or_other_id,
     project_notes,
     officer_in_charge,
+    total_expense,
+    total_project_budget,
     created_by
   } = req.body;
 
@@ -26,13 +28,15 @@ const createProject = async (req, res) => {
       `INSERT INTO public.projects
         (project_code, project_name, project_category, status_of_project, client_name,
          project_start_date, project_location, vcs_gs_or_other_id, project_notes,
-         officer_in_charge, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+         officer_in_charge, total_expence, total_project_budget,
+         created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
        RETURNING *`,
       [
         project_code, project_name, project_category, status_of_project, client_name,
         project_start_date, project_location, vcs_gs_or_other_id, project_notes,
-        officer_in_charge, created_by
+        officer_in_charge, total_expence, total_project_budget,
+        created_by
       ]
     );
     res.status(201).json(result.rows[0]);
@@ -95,7 +99,8 @@ const updateProject = async (req, res) => {
   const updatableFields = [
     'project_name', 'project_category', 'status_of_project', 'client_name',
     'project_start_date', 'project_location', 'vcs_gs_or_other_id',
-    'project_notes', 'officer_in_charge', 'updated_by', 'is_active'
+    'project_notes', 'officer_in_charge', 'total_expense',
+    'total_project_budget', 'updated_by', 'is_active'
   ];
 
   const fieldsToUpdate = Object.keys(req.body).filter(key => updatableFields.includes(key));
@@ -112,7 +117,7 @@ const updateProject = async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE public.projects
-       SET ${setClause}, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+       SET ${setClause}, updated_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
        WHERE project_code = $${fieldsToUpdate.length + 1}
        RETURNING *`,
       [...values, project_code]
