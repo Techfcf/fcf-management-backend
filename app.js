@@ -23,11 +23,10 @@ const app = express();
  * Allowed Frontend Origins
  */
 const allowedOrigins = [
-  "http://localhost:5173",      // Vite
-  "http://localhost:3000",      // React CRA (if used)
-  "https://fcf-management-app.vercel.app/",
-  "https://fcf-management.fitclimate.com"
-
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://fcf-management-app.vercel.app",
+  "https://fcf-management.fitclimate.com",
 ];
 
 /**
