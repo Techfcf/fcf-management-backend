@@ -179,10 +179,21 @@ const createVendor = async (req, res) => {
     notes_or_remarks,
     verification_status,
     project_code,
-    created_by
-    // NOTE: vendor_id is intentionally NOT read from req.body — it is
-    // always auto-generated on the server.
+    // NOTE: vendor_id and created_by are intentionally NOT read from
+    // req.body — vendor_id is always auto-generated on the server, and
+    // created_by always comes from the authenticated user (below), never
+    // from client input.
   } = req.body;
+
+  // Comes from the auth middleware (JWT/passport), not from the client.
+  const created_by = req.user?.id;
+
+  if (!created_by) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: missing logged-in user",
+    });
+  }
 
   // Remove extra spaces
   vendor_name = vendor_name?.trim();
@@ -267,21 +278,33 @@ const createVendorsBulk = async (req, res) => {
     });
   }
 
+  // Comes from the auth middleware (JWT/passport), not from the client.
+  const created_by = req.user?.id;
+
+  if (!created_by) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: missing logged-in user",
+    });
+  }
+
   const inserted = [];
   const failed = [];
 
   for (let i = 0; i < vendors.length; i++) {
     const raw = vendors[i];
 
-    // vendor_id from the incoming payload (if any) is ignored — always
-    // auto-generated on the server.
-    const { vendor_id: _ignoredVendorId, ...rest } = raw;
+    // vendor_id and created_by from the incoming payload (if any) are
+    // ignored — vendor_id is always auto-generated, created_by always
+    // comes from the authenticated user.
+    const { vendor_id: _ignoredVendorId, created_by: _ignoredCreatedBy, ...rest } = raw;
 
     const row = {
       ...rest,
       vendor_name: raw.vendor_name?.trim(),
       email_id: raw.email_id?.trim(),
       project_code: raw.project_code?.trim(),
+      created_by,
     };
 
     const validationError = validateVendorRow(row);
@@ -402,7 +425,17 @@ const updatevendors = async (req, res) => {
     // "is_active" // Uncomment if your table has this column
   ];
 
-  const body = { ...req.body };
+  // Comes from the auth middleware (JWT/passport), not from the client.
+  const updated_by = req.user?.id;
+
+  if (!updated_by) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: missing logged-in user",
+    });
+  }
+
+  const body = { ...req.body, updated_by };
   if (typeof body.project_code === "string") {
     body.project_code = body.project_code.trim();
   }
