@@ -2,27 +2,25 @@ const express = require("express");
 const router = express.Router();
 const { authMiddleware } = require("../middleware/authMiddleware");
 
-
 const {
   createVendor,
   getvendors,
   getvendorByvendorId,
-  createVendorsBulk,   // 👈 add this import
+  createVendorsBulk,
   updatevendors
 } = require("../controllers/ProjectModule/vendorController");
 
 // CREATE VENDOR
-router.post("/", authMiddleware,createVendor);
-router.post("/bulk", authMiddleware, createVendorsBulk);   // 👈 add this route
-
+router.post("/", authMiddleware, createVendor);
+router.post("/bulk", authMiddleware, createVendorsBulk);
 
 // GET ALL VENDORS
 router.get("/", authMiddleware, getvendors);
 
-// GET VENDOR BY ID
-router.get("/vendors/:vendor_id",authMiddleware, getvendorByvendorId);
+// GET VENDOR BY vendor_id
+router.get("/:vendor_id", authMiddleware, getvendorByvendorId);
 
-// UPDATE VENDOR
-router.put("/vendors/:vendor_id", authMiddleware,updatevendors);
+// UPDATE VENDOR BY vendor_id
+router.put("/:vendor_id", authMiddleware, updatevendors);
 
 module.exports = router;
