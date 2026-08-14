@@ -20,9 +20,9 @@ router.post("/bulk", authMiddleware, createVendorsBulk);   // 👈 add this rout
 router.get("/", authMiddleware, getvendors);
 
 // GET VENDOR BY ID
-router.get("/:vendor_id",authMiddleware, getvendorByvendorId);
+router.get("/vendors/:vendor_id",authMiddleware, getvendorByvendorId);
 
 // UPDATE VENDOR
-router.put("/:id", authMiddleware,updatevendors);
+router.put("/vendors/:vendor_id", authMiddleware,updatevendors);
 
 module.exports = router;

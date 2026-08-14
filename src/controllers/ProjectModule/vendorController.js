@@ -379,15 +379,15 @@ const getvendors = async (req, res) => {
   }
 };
 
-// GET ONE (by primary key `id`)
-// Route should now be something like: GET /api/vendors/:id
+// GET ONE (by vendor_id, not the internal primary key)
+// Route should now be something like: GET /api/vendors/:vendor_id
 const getvendorByvendorId = async (req, res) => {
-  const { id } = req.params;
+  const { vendor_id } = req.params;
 
   try {
     const result = await pool.query(
-      `SELECT * FROM public.vendor WHERE id = $1`,
-      [id]
+      `SELECT * FROM public.vendor WHERE vendor_id = $1`,
+      [vendor_id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'vendor not found' });
@@ -399,11 +399,11 @@ const getvendorByvendorId = async (req, res) => {
   }
 };
 
-// UPDATE VENDOR (by primary key `id`)
-// Route should now be something like: PUT /api/vendors/:id
-// vendor_id is NOT in updatableFields — it is immutable once generated.
+// UPDATE VENDOR (by vendor_id, not the internal primary key)
+// Route should now be something like: PUT /api/vendors/:vendor_id
+// The vendor_id itself is NOT in updatableFields — it is immutable once generated.
 const updatevendors = async (req, res) => {
-  const { id } = req.params;
+  const { vendor_id } = req.params;
 
   const updatableFields = [
     "vendor_name",
@@ -488,9 +488,9 @@ const updatevendors = async (req, res) => {
       `UPDATE public.vendor
        SET
          ${setClause}
-       WHERE id = $${fieldsToUpdate.length + 1}
+       WHERE vendor_id = $${fieldsToUpdate.length + 1}
        RETURNING *`,
-      [...values, id]
+      [...values, vendor_id]
     );
 
     if (result.rows.length === 0) {
