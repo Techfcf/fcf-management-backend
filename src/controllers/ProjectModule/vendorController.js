@@ -3,23 +3,27 @@ const pool = require("../../config/db");
 
 /* ---------------- SHARED VALIDATION ---------------- */
 const allowedStatus = ["Verification Pending", "Verified Successfully"];
+const allowedYesNo = ["Yes", "No"];
 
+// NOTE: vendor_id is no longer accepted from the client — it is
+// auto-generated on the server (see generateVendorId below), so it is
+// intentionally NOT validated/required here anymore.
 const validateVendorRow = (row) => {
   let {
-    vendor_id,
     vendor_name,
     contact_person_mobile_no,
     email_id,
     ifsc_code,
     verification_status,
     project_code,
+    gst_or_pan_certificate,
+    msme_certificate,
+    bank_details_proof,
   } = row;
 
-  vendor_id = vendor_id?.trim();
   vendor_name = vendor_name?.trim();
   email_id = email_id?.trim();
 
-  if (!vendor_id) return "Vendor ID is required";
   if (!vendor_name) return "Vendor Name is required";
   if (vendor_name.length < 3) return "Vendor Name must be at least 3 characters";
 
@@ -39,12 +43,46 @@ const validateVendorRow = (row) => {
     return "Verification Status must be Verification Pending or Verified Successfully";
   }
 
+  // gst_or_pan_certificate / msme_certificate / bank_details_proof are now
+  // simple Yes/No flags (previously free-text URLs)
+  if (gst_or_pan_certificate && !allowedYesNo.includes(gst_or_pan_certificate)) {
+    return "GST / PAN Certificate must be Yes or No";
+  }
+
+  if (msme_certificate && !allowedYesNo.includes(msme_certificate)) {
+    return "MSME Certificate must be Yes or No";
+  }
+
+  if (bank_details_proof && !allowedYesNo.includes(bank_details_proof)) {
+    return "Bank Details Proof must be Yes or No";
+  }
+
   // project_code is now a plain VARCHAR column, so it must be a simple string
   if (project_code !== undefined && project_code !== null && typeof project_code !== "string") {
     return "project_code must be a string";
   }
 
   return null; // no errors
+};
+
+/* ---------------- VENDOR ID AUTO-GENERATION ---------------- */
+// Generates the next sequential vendor_id, e.g. VEN-0001, VEN-0002, ...
+// based on the highest existing numeric suffix currently in the table.
+const generateVendorId = async () => {
+  const result = await pool.query(
+    `SELECT vendor_id FROM public.vendor
+     WHERE vendor_id ~ '^VEN-[0-9]+$'
+     ORDER BY (regexp_replace(vendor_id, '\\D', '', 'g'))::bigint DESC
+     LIMIT 1`
+  );
+
+  let nextNumber = 1;
+  if (result.rows.length > 0) {
+    const match = result.rows[0].vendor_id.match(/(\d+)$/);
+    if (match) nextNumber = parseInt(match[1], 10) + 1;
+  }
+
+  return `VEN-${String(nextNumber).padStart(4, "0")}`;
 };
 
 const VENDOR_COLUMNS = [
@@ -101,9 +139,31 @@ const insertVendorRow = async (row) => {
   return result.rows[0];
 };
 
+// Inserts a row with an auto-generated vendor_id, retrying a few times in
+// case of a rare unique-constraint collision from concurrent requests.
+const insertVendorRowWithGeneratedId = async (row, maxAttempts = 5) => {
+  let lastErr;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const vendor_id = await generateVendorId();
+
+    try {
+      return await insertVendorRow({ ...row, vendor_id });
+    } catch (err) {
+      if (err.code === "23505") {
+        // vendor_id collision (e.g. concurrent insert) — regenerate and retry
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastErr || new Error("Failed to generate a unique vendor_id");
+};
+
 const createVendor = async (req, res) => {
   let {
-    vendor_id,
     vendor_name,
     address,
     contact_person_name,
@@ -120,22 +180,25 @@ const createVendor = async (req, res) => {
     verification_status,
     project_code,
     created_by
+    // NOTE: vendor_id is intentionally NOT read from req.body — it is
+    // always auto-generated on the server.
   } = req.body;
 
   // Remove extra spaces
-  vendor_id = vendor_id?.trim();
   vendor_name = vendor_name?.trim();
   email_id = email_id?.trim();
   project_code = project_code?.trim();
 
   const validationError = validateVendorRow({
-    vendor_id,
     vendor_name,
     contact_person_mobile_no,
     email_id,
     ifsc_code,
     verification_status,
     project_code,
+    gst_or_pan_certificate,
+    msme_certificate,
+    bank_details_proof,
   });
 
   if (validationError) {
@@ -146,8 +209,7 @@ const createVendor = async (req, res) => {
   }
 
   try {
-    const inserted = await insertVendorRow({
-      vendor_id,
+    const inserted = await insertVendorRowWithGeneratedId({
       vendor_name,
       address,
       contact_person_name,
@@ -178,7 +240,7 @@ const createVendor = async (req, res) => {
     if (err.code === "23505") {
       return res.status(409).json({
         success: false,
-        message: "Vendor ID already exists"
+        message: "Could not generate a unique Vendor ID, please try again"
       });
     }
 
@@ -191,9 +253,10 @@ const createVendor = async (req, res) => {
 
 /* ---------------- BULK CREATE ---------------- */
 // POST /api/vendors/bulk
-// Body: { vendors: [ {vendor_id, vendor_name, ...}, ... ] }
-// Each row is validated and inserted independently, so one bad/duplicate
-// row does not block the rest of the batch from being saved.
+// Body: { vendors: [ {vendor_name, ...}, ... ] }
+// Each row is validated and inserted independently, so one bad row does not
+// block the rest of the batch from being saved. vendor_id is auto-generated
+// per row on the server, the same as single-create.
 const createVendorsBulk = async (req, res) => {
   const { vendors } = req.body;
 
@@ -210,9 +273,12 @@ const createVendorsBulk = async (req, res) => {
   for (let i = 0; i < vendors.length; i++) {
     const raw = vendors[i];
 
+    // vendor_id from the incoming payload (if any) is ignored — always
+    // auto-generated on the server.
+    const { vendor_id: _ignoredVendorId, ...rest } = raw;
+
     const row = {
-      ...raw,
-      vendor_id: raw.vendor_id?.trim(),
+      ...rest,
       vendor_name: raw.vendor_name?.trim(),
       email_id: raw.email_id?.trim(),
       project_code: raw.project_code?.trim(),
@@ -223,26 +289,24 @@ const createVendorsBulk = async (req, res) => {
     if (validationError) {
       failed.push({
         row: i,
-        vendor_id: row.vendor_id || null,
         message: validationError,
       });
       continue;
     }
 
     try {
-      const savedRow = await insertVendorRow(row);
+      const savedRow = await insertVendorRowWithGeneratedId(row);
       inserted.push(savedRow);
     } catch (err) {
       console.error(err);
 
       const message =
         err.code === "23505"
-          ? "Vendor ID already exists"
+          ? "Could not generate a unique Vendor ID, please try again"
           : "Failed to create vendor";
 
       failed.push({
         row: i,
-        vendor_id: row.vendor_id || null,
         message,
       });
     }
@@ -314,6 +378,7 @@ const getvendorByvendorId = async (req, res) => {
 
 // UPDATE VENDOR (by primary key `id`)
 // Route should now be something like: PUT /api/vendors/:id
+// vendor_id is NOT in updatableFields — it is immutable once generated.
 const updatevendors = async (req, res) => {
   const { id } = req.params;
 
@@ -340,6 +405,30 @@ const updatevendors = async (req, res) => {
   const body = { ...req.body };
   if (typeof body.project_code === "string") {
     body.project_code = body.project_code.trim();
+  }
+
+  // Never allow vendor_id to be changed via update, even if sent
+  delete body.vendor_id;
+
+  if (body.gst_or_pan_certificate && !allowedYesNo.includes(body.gst_or_pan_certificate)) {
+    return res.status(400).json({
+      success: false,
+      message: "GST / PAN Certificate must be Yes or No"
+    });
+  }
+
+  if (body.msme_certificate && !allowedYesNo.includes(body.msme_certificate)) {
+    return res.status(400).json({
+      success: false,
+      message: "MSME Certificate must be Yes or No"
+    });
+  }
+
+  if (body.bank_details_proof && !allowedYesNo.includes(body.bank_details_proof)) {
+    return res.status(400).json({
+      success: false,
+      message: "Bank Details Proof must be Yes or No"
+    });
   }
 
   // Get only allowed fields
