@@ -8,53 +8,34 @@ const isValidNumber = (val) => {
   return !isNaN(Number(val));
 };
 
+// project_budget_year is optional (nullable column). particulars/rate/hectares
+// are NOT NULL in the DB, so they are required here.
 const validateProjectRow = (row) => {
-  let {
-    project_code,
-    project_name,
-    project_budget,
-    project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
-  } = row;
+  let { project_code, project_name, project_budget_year, particulars, rate, hectares } = row;
 
   project_code = project_code?.trim();
   project_name = project_name?.trim();
+  particulars = typeof particulars === "string" ? particulars.trim() : particulars;
 
   if (!project_code) return "project_code is required";
+  if (typeof project_code !== "string") return "project_code must be a string";
+
   if (!project_name) return "Project Name is required";
   if (project_name.length < 3) return "Project Name must be at least 3 characters";
 
-  if (typeof project_code !== "string") return "project_code must be a string";
+  if (!particulars) return "particulars is required";
 
-  const numericFields = {
-    project_budget,
-    project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
-  };
+  if (rate === undefined || rate === null || rate === "") return "rate is required";
+  if (!isValidNumber(rate)) return "rate must be a valid number";
+  if (Number(rate) < 0) return "rate cannot be negative";
 
-  for (const [field, value] of Object.entries(numericFields)) {
-    if (!isValidNumber(value)) {
-      return `${field} must be a valid number`;
-    }
-    if (value !== undefined && value !== null && value !== "" && Number(value) < 0) {
-      return `${field} cannot be negative`;
-    }
+  if (hectares === undefined || hectares === null || hectares === "") return "hectares is required";
+  if (!isValidNumber(hectares)) return "hectares must be a valid number";
+  if (Number(hectares) < 0) return "hectares cannot be negative";
+
+  if (!isValidNumber(project_budget_year)) return "project_budget_year must be a valid number";
+  if (project_budget_year !== undefined && project_budget_year !== null && project_budget_year !== "" && Number(project_budget_year) < 0) {
+    return "project_budget_year cannot be negative";
   }
 
   return null; // no errors
@@ -66,19 +47,7 @@ const validateProjectRow = (row) => {
    in a query. This keeps "" treated as "not provided" consistently
    across validation AND the actual DB write. */
 
-const NUMERIC_FIELDS = [
-  "project_budget",
-  "project_budget_year",
-  "ip_cost",
-  "material_vendor_po_amt",
-  "expenses",
-  "total_expenses_till_date",
-  "remaining_amount",
-  "hr_expenses",
-  "travel_expenses",
-  "overhead_expenses",
-  "total_cost_of_project",
-];
+const NUMERIC_FIELDS = ["project_budget_year", "rate", "hectares", "cost"];
 
 const sanitizeNumericFields = (row) => {
   const clean = { ...row };
@@ -90,47 +59,46 @@ const sanitizeNumericFields = (row) => {
   return clean;
 };
 
+// cost is always derived from rate * hectares server-side, so the DB value
+// stays consistent even if a caller sends a different/missing cost.
+const deriveCost = (row) => {
+  const rate = Number(row.rate);
+  const hectares = Number(row.hectares);
+  if (isNaN(rate) || isNaN(hectares)) return row.cost ?? null;
+  return rate * hectares;
+};
+
 const PROJECT_COLUMNS = [
   "project_code",
   "project_name",
-  "project_budget",
   "project_budget_year",
-  "ip_cost",
-  "material_vendor_po_amt",
-  "expenses",
-  "total_expenses_till_date",
-  "remaining_amount",
-  "hr_expenses",
-  "travel_expenses",
-  "overhead_expenses",
-  "total_cost_of_project",
+  "particulars",
+  "rate",
+  "hectares",
+  "cost",
   "created_by",
 ];
 
 const insertProjectRow = async (row) => {
   const cleanRow = sanitizeNumericFields(row);
+  cleanRow.cost = deriveCost(cleanRow);
+
   const values = PROJECT_COLUMNS.map((col) => cleanRow[col]);
-  // project_code ... created_by ($14), updated_by = created_by ($14 again)
+  // project_code ... created_by ($8), updated_by = created_by ($8 again)
   const result = await pool.query(
     `INSERT INTO public.project_budget (
         project_code,
         project_name,
-        project_budget,
         project_budget_year,
-        ip_cost,
-        material_vendor_po_amt,
-        expenses,
-        total_expenses_till_date,
-        remaining_amount,
-        hr_expenses,
-        travel_expenses,
-        overhead_expenses,
-        total_cost_of_project,
+        particulars,
+        rate,
+        hectares,
+        cost,
         created_by,
         updated_by
     )
     VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14
+        $1,$2,$3,$4,$5,$6,$7,$8,$8
     )
     RETURNING *`,
     values
@@ -145,37 +113,25 @@ const createProjectBudget = async (req, res) => {
   let {
     project_code,
     project_name,
-    project_budget,
     project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
+    particulars,
+    rate,
+    hectares,
+    cost,
     created_by,
   } = req.body;
 
   project_code = project_code?.trim();
   project_name = project_name?.trim();
+  particulars = typeof particulars === "string" ? particulars.trim() : particulars;
 
   const validationError = validateProjectRow({
     project_code,
     project_name,
-    project_budget,
     project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
+    particulars,
+    rate,
+    hectares,
   });
 
   if (validationError) {
@@ -189,17 +145,11 @@ const createProjectBudget = async (req, res) => {
     const inserted = await insertProjectRow({
       project_code,
       project_name,
-      project_budget,
       project_budget_year,
-      ip_cost,
-      material_vendor_po_amt,
-      expenses,
-      total_expenses_till_date,
-      remaining_amount,
-      hr_expenses,
-      travel_expenses,
-      overhead_expenses,
-      total_cost_of_project,
+      particulars,
+      rate,
+      hectares,
+      cost,
       created_by,
     });
 
@@ -227,9 +177,10 @@ const createProjectBudget = async (req, res) => {
 
 /* ---------------- BULK CREATE ---------------- */
 // POST /api/project-budgets/bulk
-// Body: { projects: [ {project_code, project_name, ...}, ... ] }
-// Each row is validated and inserted independently, so one bad/duplicate
-// row does not block the rest of the batch from being saved.
+// Body: { projects: [ {project_code, project_name, project_budget_year, particulars, rate, hectares, created_by}, ... ] }
+// Used when the frontend's "Add Item" form submits several line items for the
+// same project in one go. Each row is validated and inserted independently,
+// so one bad row does not block the rest of the batch from being saved.
 const createProjectBudgetsBulk = async (req, res) => {
   const { projects } = req.body;
 
@@ -250,6 +201,7 @@ const createProjectBudgetsBulk = async (req, res) => {
       ...raw,
       project_code: raw.project_code?.trim(),
       project_name: raw.project_name?.trim(),
+      particulars: typeof raw.particulars === "string" ? raw.particulars.trim() : raw.particulars,
     };
 
     const validationError = validateProjectRow(row);
@@ -284,7 +236,7 @@ const createProjectBudgetsBulk = async (req, res) => {
 
   res.status(201).json({
     success: true,
-    message: `${inserted.length} of ${projects.length} project(s) created`,
+    message: `${inserted.length} of ${projects.length} item(s) created`,
     inserted,
     failed,
   });
@@ -314,7 +266,25 @@ const getProjectBudgets = async (req, res) => {
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
-    res.json(result.rows);
+
+    // total_project_budget = SUM(cost) across ALL particulars for this
+    // project_code — computed separately from the paginated LIMIT/OFFSET
+    // query above so the total stays correct even on page 2, 3, etc.
+    let total_project_budget = 0;
+    if (project_code) {
+      const totalResult = await pool.query(
+        `SELECT COALESCE(SUM(cost), 0) AS total
+         FROM public.project_budget
+         WHERE project_code = $1`,
+        [project_code]
+      );
+      total_project_budget = Number(totalResult.rows[0].total);
+    }
+
+    res.json({
+      data: result.rows,
+      total_project_budget,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch project budgets" });
@@ -348,17 +318,11 @@ const updateProjectBudget = async (req, res) => {
 
   const updatableFields = [
     "project_name",
-    "project_budget",
     "project_budget_year",
-    "ip_cost",
-    "material_vendor_po_amt",
-    "expenses",
-    "total_expenses_till_date",
-    "remaining_amount",
-    "hr_expenses",
-    "travel_expenses",
-    "overhead_expenses",
-    "total_cost_of_project",
+    "particulars",
+    "rate",
+    "hectares",
+    "cost",
     "updated_by",
   ];
 
@@ -367,6 +331,18 @@ const updateProjectBudget = async (req, res) => {
   const body = sanitizeNumericFields({ ...req.body });
   if (typeof body.project_name === "string") {
     body.project_name = body.project_name.trim();
+  }
+  if (typeof body.particulars === "string") {
+    body.particulars = body.particulars.trim();
+  }
+
+  // Keep cost consistent with rate/hectares whenever either is part of this update.
+  if (body.rate !== undefined || body.hectares !== undefined) {
+    const rate = body.rate !== undefined ? Number(body.rate) : null;
+    const hectares = body.hectares !== undefined ? Number(body.hectares) : null;
+    if (rate !== null && hectares !== null && !isNaN(rate) && !isNaN(hectares)) {
+      body.cost = rate * hectares;
+    }
   }
 
   // Get only allowed fields
