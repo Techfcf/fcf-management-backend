@@ -8,53 +8,27 @@ const isValidNumber = (val) => {
   return !isNaN(Number(val));
 };
 
-const validateProjectRow = (row) => {
-  let {
-    project_code,
-    project_name,
-    project_budget,
-    project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
-  } = row;
+// budget_number is auto-generated server-side, so it is never required from
+// the caller. financial_year, budget_name, project_code are NOT NULL in the
+// DB, so they are required here.
+const validateBudgetRow = (row) => {
+  let { project_code, financial_year, budget_name, status } = row;
 
   project_code = project_code?.trim();
-  project_name = project_name?.trim();
+  financial_year = financial_year?.trim();
+  budget_name = budget_name?.trim();
 
   if (!project_code) return "project_code is required";
-  if (!project_name) return "Project Name is required";
-  if (project_name.length < 3) return "Project Name must be at least 3 characters";
-
   if (typeof project_code !== "string") return "project_code must be a string";
 
-  const numericFields = {
-    project_budget,
-    project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
-  };
+  if (!financial_year) return "financial_year is required";
 
-  for (const [field, value] of Object.entries(numericFields)) {
-    if (!isValidNumber(value)) {
-      return `${field} must be a valid number`;
-    }
-    if (value !== undefined && value !== null && value !== "" && Number(value) < 0) {
-      return `${field} cannot be negative`;
-    }
+  if (!budget_name) return "budget_name is required";
+  if (budget_name.length < 3) return "budget_name must be at least 3 characters";
+
+  const allowedStatus = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED"];
+  if (status !== undefined && status !== null && status !== "" && !allowedStatus.includes(status)) {
+    return `status must be one of: ${allowedStatus.join(", ")}`;
   }
 
   return null; // no errors
@@ -67,17 +41,12 @@ const validateProjectRow = (row) => {
    across validation AND the actual DB write. */
 
 const NUMERIC_FIELDS = [
-  "project_budget",
-  "project_budget_year",
-  "ip_cost",
-  "material_vendor_po_amt",
-  "expenses",
-  "total_expenses_till_date",
-  "remaining_amount",
-  "hr_expenses",
-  "travel_expenses",
-  "overhead_expenses",
-  "total_cost_of_project",
+  "labour_total",
+  "material_total",
+  "hr_total",
+  "training_total",
+  "other_total",
+  "grand_total",
 ];
 
 const sanitizeNumericFields = (row) => {
@@ -90,47 +59,45 @@ const sanitizeNumericFields = (row) => {
   return clean;
 };
 
-const PROJECT_COLUMNS = [
+// Auto-generate a budget number like BUD-2026-0001, scoped per financial year
+const generateBudgetNumber = async (financial_year) => {
+  const yearPart = (financial_year || "").replace(/[^0-9]/g, "").slice(0, 4) || new Date().getFullYear();
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM public.project_budget WHERE financial_year = $1`,
+    [financial_year]
+  );
+  const seq = String(result.rows[0].count + 1).padStart(4, "0");
+  return `BUD-${yearPart}-${seq}`;
+};
+
+const BUDGET_COLUMNS = [
+  "budget_number",
   "project_code",
-  "project_name",
-  "project_budget",
-  "project_budget_year",
-  "ip_cost",
-  "material_vendor_po_amt",
-  "expenses",
-  "total_expenses_till_date",
-  "remaining_amount",
-  "hr_expenses",
-  "travel_expenses",
-  "overhead_expenses",
-  "total_cost_of_project",
+  "financial_year",
+  "budget_name",
+  "status",
   "created_by",
 ];
 
-const insertProjectRow = async (row) => {
+const insertBudgetRow = async (row) => {
   const cleanRow = sanitizeNumericFields(row);
-  const values = PROJECT_COLUMNS.map((col) => cleanRow[col]);
-  // project_code ... created_by ($14), updated_by = created_by ($14 again)
+  cleanRow.budget_number = cleanRow.budget_number || (await generateBudgetNumber(cleanRow.financial_year));
+  cleanRow.status = cleanRow.status || "DRAFT";
+
+  const values = BUDGET_COLUMNS.map((col) => cleanRow[col]);
+  // budget_number ... created_by ($6), updated_by = created_by ($6 again)
   const result = await pool.query(
     `INSERT INTO public.project_budget (
+        budget_number,
         project_code,
-        project_name,
-        project_budget,
-        project_budget_year,
-        ip_cost,
-        material_vendor_po_amt,
-        expenses,
-        total_expenses_till_date,
-        remaining_amount,
-        hr_expenses,
-        travel_expenses,
-        overhead_expenses,
-        total_cost_of_project,
+        financial_year,
+        budget_name,
+        status,
         created_by,
         updated_by
     )
     VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14
+        $1,$2,$3,$4,$5,$6,$6
     )
     RETURNING *`,
     values
@@ -142,40 +109,17 @@ const insertProjectRow = async (row) => {
 /* ---------------- CREATE (single) ---------------- */
 // POST /api/project-budgets
 const createProjectBudget = async (req, res) => {
-  let {
-    project_code,
-    project_name,
-    project_budget,
-    project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
-    created_by,
-  } = req.body;
+  let { project_code, financial_year, budget_name, status, created_by } = req.body;
 
   project_code = project_code?.trim();
-  project_name = project_name?.trim();
+  financial_year = financial_year?.trim();
+  budget_name = budget_name?.trim();
 
-  const validationError = validateProjectRow({
+  const validationError = validateBudgetRow({
     project_code,
-    project_name,
-    project_budget,
-    project_budget_year,
-    ip_cost,
-    material_vendor_po_amt,
-    expenses,
-    total_expenses_till_date,
-    remaining_amount,
-    hr_expenses,
-    travel_expenses,
-    overhead_expenses,
-    total_cost_of_project,
+    financial_year,
+    budget_name,
+    status,
   });
 
   if (validationError) {
@@ -186,20 +130,11 @@ const createProjectBudget = async (req, res) => {
   }
 
   try {
-    const inserted = await insertProjectRow({
+    const inserted = await insertBudgetRow({
       project_code,
-      project_name,
-      project_budget,
-      project_budget_year,
-      ip_cost,
-      material_vendor_po_amt,
-      expenses,
-      total_expenses_till_date,
-      remaining_amount,
-      hr_expenses,
-      travel_expenses,
-      overhead_expenses,
-      total_cost_of_project,
+      financial_year,
+      budget_name,
+      status,
       created_by,
     });
 
@@ -214,7 +149,7 @@ const createProjectBudget = async (req, res) => {
     if (err.code === "23505") {
       return res.status(409).json({
         success: false,
-        message: "project_code already exists",
+        message: "budget_number already exists",
       });
     }
 
@@ -227,32 +162,33 @@ const createProjectBudget = async (req, res) => {
 
 /* ---------------- BULK CREATE ---------------- */
 // POST /api/project-budgets/bulk
-// Body: { projects: [ {project_code, project_name, ...}, ... ] }
-// Each row is validated and inserted independently, so one bad/duplicate
-// row does not block the rest of the batch from being saved.
+// Body: { budgets: [ {project_code, financial_year, budget_name, status, created_by}, ... ] }
+// Each row is validated and inserted independently, so one bad row does not
+// block the rest of the batch from being saved.
 const createProjectBudgetsBulk = async (req, res) => {
-  const { projects } = req.body;
+  const { budgets } = req.body;
 
-  if (!Array.isArray(projects) || projects.length === 0) {
+  if (!Array.isArray(budgets) || budgets.length === 0) {
     return res.status(400).json({
       success: false,
-      message: "Request body must include a non-empty 'projects' array",
+      message: "Request body must include a non-empty 'budgets' array",
     });
   }
 
   const inserted = [];
   const failed = [];
 
-  for (let i = 0; i < projects.length; i++) {
-    const raw = projects[i];
+  for (let i = 0; i < budgets.length; i++) {
+    const raw = budgets[i];
 
     const row = {
       ...raw,
       project_code: raw.project_code?.trim(),
-      project_name: raw.project_name?.trim(),
+      financial_year: raw.financial_year?.trim(),
+      budget_name: raw.budget_name?.trim(),
     };
 
-    const validationError = validateProjectRow(row);
+    const validationError = validateBudgetRow(row);
 
     if (validationError) {
       failed.push({
@@ -264,14 +200,14 @@ const createProjectBudgetsBulk = async (req, res) => {
     }
 
     try {
-      const savedRow = await insertProjectRow(row);
+      const savedRow = await insertBudgetRow(row);
       inserted.push(savedRow);
     } catch (err) {
       console.error(err);
 
       const message =
         err.code === "23505"
-          ? "project_code already exists"
+          ? "budget_number already exists"
           : "Failed to create project budget";
 
       failed.push({
@@ -284,20 +220,20 @@ const createProjectBudgetsBulk = async (req, res) => {
 
   res.status(201).json({
     success: true,
-    message: `${inserted.length} of ${projects.length} project(s) created`,
+    message: `${inserted.length} of ${budgets.length} item(s) created`,
     inserted,
     failed,
   });
 };
 
 /* ---------------- GET ALL ---------------- */
-// GET /api/project-budgets?page=1&limit=20&project_code=PRJ-001
+// GET /api/project-budgets?page=1&limit=20&project_code=PRJ-001&status=DRAFT&financial_year=2026-27
 const getProjectBudgets = async (req, res) => {
-  const { page = 1, limit = 20, project_code } = req.query;
+  const { page = 1, limit = 20, project_code, status, financial_year } = req.query;
   const offset = (page - 1) * limit;
 
   try {
-    let query = `SELECT * FROM public.project_budget`;
+    let query = `SELECT * FROM public.project_budget WHERE is_active = TRUE`;
     const conditions = [];
     const params = [];
 
@@ -306,18 +242,47 @@ const getProjectBudgets = async (req, res) => {
       conditions.push(`project_code = $${params.length}`);
     }
 
+    if (status) {
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
+    }
+
+    if (financial_year) {
+      params.push(financial_year);
+      conditions.push(`financial_year = $${params.length}`);
+    }
+
     if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(" AND ")}`;
+      query += ` AND ${conditions.join(" AND ")}`;
     }
 
     query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
-    res.json(result.rows);
+
+    // grand_total_sum = SUM(grand_total) across ALL matching rows —
+    // computed separately from the paginated LIMIT/OFFSET query above so
+    // the total stays correct even on page 2, 3, etc.
+    let grand_total_sum = 0;
+    if (project_code) {
+      const totalResult = await pool.query(
+        `SELECT COALESCE(SUM(grand_total), 0) AS total
+         FROM public.project_budget
+         WHERE project_code = $1 AND is_active = TRUE`,
+        [project_code]
+      );
+      grand_total_sum = Number(totalResult.rows[0].total);
+    }
+
+    res.json({
+      success: true,
+      data: result.rows,
+      grand_total_sum,
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to fetch project budgets" });
+    res.status(500).json({ success: false, message: "Failed to fetch project budgets" });
   }
 };
 
@@ -328,16 +293,16 @@ const getProjectBudgetById = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT * FROM public.project_budget WHERE id = $1`,
+      `SELECT * FROM public.project_budget WHERE id = $1 AND is_active = TRUE`,
       [id]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Project budget not found" });
+      return res.status(404).json({ success: false, message: "Project budget not found" });
     }
-    res.json(result.rows[0]);
+    res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to fetch project budget" });
+    res.status(500).json({ success: false, message: "Failed to fetch project budget" });
   }
 };
 
@@ -347,26 +312,26 @@ const updateProjectBudget = async (req, res) => {
   const { id } = req.params;
 
   const updatableFields = [
-    "project_name",
-    "project_budget",
-    "project_budget_year",
-    "ip_cost",
-    "material_vendor_po_amt",
-    "expenses",
-    "total_expenses_till_date",
-    "remaining_amount",
-    "hr_expenses",
-    "travel_expenses",
-    "overhead_expenses",
-    "total_cost_of_project",
+    "project_code",
+    "financial_year",
+    "budget_name",
+    "status",
     "updated_by",
   ];
 
-  // Sanitize numeric fields ("" -> null) before filtering/updating,
-  // so empty numeric inputs don't reach Postgres as ''.
-  const body = sanitizeNumericFields({ ...req.body });
-  if (typeof body.project_name === "string") {
-    body.project_name = body.project_name.trim();
+  const body = { ...req.body };
+  if (typeof body.project_code === "string") body.project_code = body.project_code.trim();
+  if (typeof body.financial_year === "string") body.financial_year = body.financial_year.trim();
+  if (typeof body.budget_name === "string") body.budget_name = body.budget_name.trim();
+
+  if (body.status) {
+    const allowedStatus = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED"];
+    if (!allowedStatus.includes(body.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `status must be one of: ${allowedStatus.join(", ")}`,
+      });
+    }
   }
 
   // Get only allowed fields
@@ -381,19 +346,22 @@ const updateProjectBudget = async (req, res) => {
     });
   }
 
-  // Create SET clause
+  // updated_at is stored as epoch seconds
+  fieldsToUpdate.push("updated_at");
+  const values = fieldsToUpdate.map((field) =>
+    field === "updated_at" ? Math.floor(Date.now() / 1000) : body[field]
+  );
+
   const setClause = fieldsToUpdate
     .map((field, index) => `${field} = $${index + 1}`)
     .join(", ");
-
-  const values = fieldsToUpdate.map((field) => body[field]);
 
   try {
     const result = await pool.query(
       `UPDATE public.project_budget
        SET
          ${setClause}
-       WHERE id = $${fieldsToUpdate.length + 1}
+       WHERE id = $${fieldsToUpdate.length + 1} AND is_active = TRUE
        RETURNING *`,
       [...values, id]
     );
@@ -420,10 +388,37 @@ const updateProjectBudget = async (req, res) => {
   }
 };
 
+/* ---------------- SOFT DELETE (by primary key `id`) ---------------- */
+// DELETE /api/project-budgets/:id
+const deleteProjectBudget = async (req, res) => {
+  const { id } = req.params;
+  const { updated_by } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE public.project_budget
+       SET is_active = FALSE, updated_by = $1, updated_at = $2
+       WHERE id = $3 AND is_active = TRUE
+       RETURNING id`,
+      [updated_by || null, Math.floor(Date.now() / 1000), id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Project budget not found." });
+    }
+
+    res.status(200).json({ success: true, message: "Project budget deleted successfully." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Failed to delete project budget." });
+  }
+};
+
 module.exports = {
   createProjectBudget,
   createProjectBudgetsBulk,
   getProjectBudgets,
   getProjectBudgetById,
   updateProjectBudget,
+  deleteProjectBudget,
 };

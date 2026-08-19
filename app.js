@@ -10,6 +10,8 @@ const appModuleRoutes = require("./src/routes/appModuleRoutes");
 const reimbursementsRoutes = require("./src/routes/reimbursementsRoutes");
 const projectBudgetRoutes = require("./src/routes/Projectbudget.routes");
 const rfqRoutes = require("./src/routes/rfq.routes");
+const projectBudgetItemsRoutes = require("./src/routes/Projectbudgetitems.routes")
+
 
 
 
@@ -72,6 +74,7 @@ app.use("/api/v1/app-module", appModuleRoutes);
 app.use("/api/v1", reimbursementsRoutes);
 app.use("/api/project-budgets", projectBudgetRoutes);
 app.use("/api/rfq", rfqRoutes);
+app.use("/api/project-budget-items",projectBudgetItemsRoutes);
 
 
 
